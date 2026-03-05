@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Wikipedia Crawl Map</title>
+
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+
+<style>
+body{
+margin:0;
+background:black;
+color:white;
+font-family:"JetBrains Mono",monospace;
+overflow:hidden;
+}
+
+#ui{
+position:absolute;
+top:10px;
+left:10px;
+border:1px solid white;
+padding:12px;
+background:black;
+z-index:10;
+}
+
+input{
+background:black;
+border:1px solid white;
+color:white;
+padding:6px;
+width:340px;
+font-family:"JetBrains Mono";
+}
+
+button{
+background:black;
+border:1px solid white;
+color:white;
+padding:6px 10px;
+font-family:"JetBrains Mono";
+cursor:pointer;
+}
+
+button:hover{
+background:white;
+color:black;
+}
+</style>
+
+</head>
+
+<body>
+
+<div id="ui">
+
+<input id="url" placeholder="Paste Wikipedia article URL">
+
+<br><br>
+
+<button onclick="start()">Start</button> <button onclick="stop()">Stop</button>
+
+<br><br>
+
+Speed: <input id="speed" type="range" min="1" max="80" value="5"> <span id="speedValue">5</span> articles/sec
+
+</div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+
+const canvas=document.getElementById("canvas")
+const ctx=canvas.getContext("2d")
+
+function resize(){
+canvas.width=window.innerWidth
+canvas.height=window.innerHeight
+}
+resize()
+window.addEventListener("resize",resize)
+
+const speedSlider=document.getElementById("speed")
+const speedValue=document.getElementById("speedValue")
+
+speedSlider.oninput=()=>speedValue.textContent=speedSlider.value
+
+let nodes=[]
+let links=[]
+let visited=new Set()
+
+let fetchQueue=[]
+let expandQueue=[]
+
+let running=false
+
+let camera={x:0,y:0,zoom:1}
+
+class Node{
+
+constructor(title,x,y){
+
+this.title=title
+this.x=x
+this.y=y
+
+this.vx=0
+this.vy=0
+
+this.padding=6
+
+ctx.font="12px JetBrains Mono"
+
+let w=ctx.measureText(title).width
+
+this.width=w+this.padding*2
+this.height=18
+
+this.spawnTime=performance.now()
+this.fadeDuration=500
+
+this.alpha=0
+this.scale=0
+
+}
+
+}
+
+function extractTitle(url){
+
+try{
+let u=new URL(url)
+return decodeURIComponent(u.pathname.split("/").pop())
+}catch{
+return null
+}
+
+}
+
+function start(){
+
+nodes=[]
+links=[]
+visited.clear()
+fetchQueue=[]
+expandQueue=[]
+
+let url=document.getElementById("url").value
+let title=extractTitle(url)
+
+if(!title) return
+
+let root=new Node(title,0,0)
+
+nodes.push(root)
+visited.add(title)
+
+fetchQueue.push(root)
+
+running=true
+
+}
+
+function stop(){
+running=false
+}
+
+async function fetchLinks(node){
+
+let api=`https://en.wikipedia.org/w/api.php?action=query&titles=${node.title}&prop=links&pllimit=max&format=json&origin=*`
+
+try{
+
+let res=await fetch(api)
+let data=await res.json()
+
+let pages=data.query.pages
+
+for(let id in pages){
+
+let arr=pages[id].links||[]
+
+for(let l of arr){
+
+let t=l.title
+
+if(visited.has(t)) continue
+
+visited.add(t)
+
+expandQueue.push({parent:node,title:t})
+
+}
+
+}
+
+}catch(e){
+console.log(e)
+}
+
+}
+
+async function crawlerLoop(){
+
+while(true){
+
+if(running && fetchQueue.length>0){
+
+let node=fetchQueue.shift()
+fetchLinks(node)
+
+}
+
+await sleep(2000)
+
+}
+
+}
+
+async function expansionLoop(){
+
+while(true){
+
+let speed=speedSlider.value
+let delay=1000/speed
+
+if(running && expandQueue.length>0){
+
+let item=expandQueue.shift()
+
+let parent=item.parent
+
+let angle=Math.random()*Math.PI*2
+let dist=200+Math.random()*80
+
+let x=parent.x+Math.cos(angle)*dist
+let y=parent.y+Math.sin(angle)*dist
+
+let node=new Node(item.title,x,y)
+
+nodes.push(node)
+links.push([parent,node])
+
+fetchQueue.push(node)
+
+}
+
+await sleep(delay)
+
+}
+
+}
+
+function sleep(ms){
+return new Promise(r=>setTimeout(r,ms))
+}
+
+crawlerLoop()
+expansionLoop()
+
+function physics(){
+
+const forceField=12
+const repelStrength=0.04
+
+for(let i=0;i<nodes.length;i++){
+for(let j=i+1;j<nodes.length;j++){
+
+let a=nodes[i]
+let b=nodes[j]
+
+if(a.scale<0.8 || b.scale<0.8) continue
+
+let dx=b.x-a.x
+let dy=b.y-a.y
+
+let dist=Math.sqrt(dx*dx+dy*dy)+0.001
+
+let minDist=(a.width/2+b.width/2)+forceField
+
+if(dist<minDist){
+
+let force=(minDist-dist)*repelStrength
+
+let fx=dx/dist*force
+let fy=dy/dist*force
+
+a.vx-=fx
+a.vy-=fy
+
+b.vx+=fx
+b.vy+=fy
+
+}
+
+}
+}
+
+for(let l of links){
+
+let a=l[0]
+let b=l[1]
+
+let dx=b.x-a.x
+let dy=b.y-a.y
+
+a.vx+=dx*0.00035
+a.vy+=dy*0.00035
+
+b.vx-=dx*0.00035
+b.vy-=dy*0.00035
+
+}
+
+for(let n of nodes){
+
+n.x+=n.vx
+n.y+=n.vy
+
+n.vx*=0.8
+n.vy*=0.8
+
+let age=performance.now()-n.spawnTime
+let progress=Math.min(age/n.fadeDuration,1)
+
+n.alpha=progress
+n.scale=progress
+
+}
+
+}
+
+function draw(){
+
+ctx.fillStyle="black"
+ctx.fillRect(0,0,canvas.width,canvas.height)
+
+ctx.save()
+
+ctx.translate(canvas.width/2,canvas.height/2)
+ctx.scale(camera.zoom,camera.zoom)
+ctx.translate(camera.x,camera.y)
+
+ctx.strokeStyle="white"
+ctx.font="12px JetBrains Mono"
+
+for(let l of links){
+
+ctx.beginPath()
+ctx.moveTo(l[0].x,l[0].y)
+ctx.lineTo(l[1].x,l[1].y)
+ctx.stroke()
+
+}
+
+for(let n of nodes){
+
+ctx.save()
+
+ctx.globalAlpha=n.alpha
+
+ctx.translate(n.x,n.y)
+ctx.scale(n.scale,n.scale)
+
+ctx.strokeRect(
+-n.width/2,
+-n.height/2,
+n.width,
+n.height
+)
+
+ctx.fillStyle="white"
+
+ctx.fillText(
+n.title,
+-n.width/2+n.padding,
+4
+)
+
+ctx.restore()
+
+}
+
+ctx.restore()
+
+}
+
+function loop(){
+
+physics()
+draw()
+
+requestAnimationFrame(loop)
+
+}
+
+loop()
+
+canvas.addEventListener("wheel",e=>{
+camera.zoom*= e.deltaY>0 ? 0.9 : 1.1
+})
+
+let dragging=false
+let lastX,lastY
+
+canvas.addEventListener("mousedown",e=>{
+dragging=true
+lastX=e.clientX
+lastY=e.clientY
+})
+
+canvas.addEventListener("mouseup",()=>dragging=false)
+
+canvas.addEventListener("mousemove",e=>{
+
+if(!dragging) return
+
+camera.x+=(e.clientX-lastX)/camera.zoom
+camera.y+=(e.clientY-lastY)/camera.zoom
+
+lastX=e.clientX
+lastY=e.clientY
+
+})
+
+</script>
+
+</body>
+</html>
